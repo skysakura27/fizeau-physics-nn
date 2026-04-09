@@ -1,0 +1,33 @@
+﻿# Fizeau Physics-Informed Neural Network Configuration
+
+network:
+  input_size: 512
+  num_zernike_modes: 37
+  num_unroll_blocks: 10
+  wavelength: 632.8e-9  # He-Ne laser (meters)
+  aperture_radius: 0.45  # Normalized (0-1)
+  focal_length: 1.0  # meters
+
+training:
+  batch_size: 32
+  learning_rate: 1e-3
+  num_epochs: 100
+  device: "cuda"  # "cpu" or "cuda"
+  
+  loss_weights:
+    reconstruction: 1.0
+    phase_consistency: 0.5
+    smoothness: 0.1
+    sparsity: 0.01
+
+data:
+  num_train_samples: 10000
+  num_val_samples: 1000
+  num_test_samples: 1000
+  noise_level_snr_db: 20
+  aberration_amplitude_range: [0.1, 0.5]
+
+paths:
+  data_dir: "./data"
+  checkpoint_dir: "./checkpoints"
+  log_dir: "./logs"
