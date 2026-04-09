@@ -1,8 +1,13 @@
 ﻿"""Minimal working example of the Fizeau PINN."""
 
-import torch
 import sys
-sys.path.insert(0, '../')
+from pathlib import Path
+
+import torch
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+sys.path.insert(0, str(ROOT))
 
 from src.config import Config
 from src.utils import create_circular_mask, normalize_phase
@@ -12,7 +17,8 @@ def main():
     print("🚀 Fizeau Physics-Informed Neural Network - Minimal Example")
     print("=" * 60)
     
-    config = Config("../config/config.yaml")
+    config_path = ROOT / "config" / "config.yaml"
+    config = Config(str(config_path))
     print(f"✓ Configuration loaded: {config}")
     
     mask = create_circular_mask(size=512, radius=0.45)
