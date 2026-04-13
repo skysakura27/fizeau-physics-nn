@@ -1,0 +1,8 @@
+# Physics configuration for Fizeau interferometry
+physics:
+  wavelength: 632.8e-9  # He-Ne laser (meters)
+  aperture_radius: 0.45  # Normalized (0-1)
+  focal_length: 1.0  # meters
+  finesse: 10
+  num_zernike_modes: 37
+  reflectance: 1.0  # TODO: calibrate from system
