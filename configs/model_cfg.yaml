@@ -1,7 +1,7 @@
 # Model and training configuration
 network:
   input_size: 512
-  num_unroll_blocks: 10
+  num_unrolling_blocks: 10
 training:
   batch_size: 32
   learning_rate: 1e-3

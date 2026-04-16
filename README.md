@@ -63,15 +63,14 @@ pip install -r requirements.txt
 
 ```python
 import torch
-from src.fizeau_network import FizeauPhysicsNet
-from src.config import Config
+from src.models import FizeauPhysicsNet
+from src.utils import Config
 
 # 加载配置
 config = Config()
-config.load('config/config.yaml')
 
 # 创建模型
-model = FizeauPhysicsNet(config.network)
+model = FizeauPhysicsNet(config.get("network", {}))
 
 # 生成测试数据
 interferogram = torch.rand(1, 1, 512, 512)  # 干涉图
@@ -144,8 +143,8 @@ pip install -r requirements-dev.txt
 ### 基本使用
 
 ```python
-from src.fizeau_network import FizeauPhysicsNet
-from src.data_loader import InterferometryDataset
+from src.models import FizeauPhysicsNet
+from src.utils.data_loader import InterferometryDataset
 from torch.utils.data import DataLoader
 
 # 加载模型
@@ -168,16 +167,16 @@ for batch in loader:
 ### 高级配置
 
 ```python
-from src.config import Config
+from src.utils import Config
 
 # 自定义配置
 config = Config()
-config.network.num_unrolling_blocks = 8
-config.network.zernike_modes = 55
-config.training.lr = 1e-4
+config.model["network"]["num_unrolling_blocks"] = 8
+config.model["network"]["zernike_modes"] = 55
+config.model["training"]["learning_rate"] = 1e-4
 
 # 创建模型
-model = FizeauPhysicsNet(config.network)
+model = FizeauPhysicsNet(config.get("network", {}))
 ```
 
 ## 🏗️ 架构详解
@@ -239,13 +238,15 @@ python scripts/generate_training_data.py \
 ```bash
 # 单 GPU 训练
 python scripts/train.py \
-    --config config/config.yaml \
+    --model_cfg configs/model_cfg.yaml \
+    --physics_cfg configs/physics_cfg.yaml \
     --data_dir data/train/ \
     --output_dir checkpoints/
 
 # 多 GPU 训练
 torchrun --nproc_per_node=4 scripts/train.py \
-    --config config/config.yaml \
+    --model_cfg configs/model_cfg.yaml \
+    --physics_cfg configs/physics_cfg.yaml \
     --data_dir data/train/ \
     --output_dir checkpoints/
 ```
@@ -319,11 +320,11 @@ class FizeauPhysicsNet(nn.Module):
 
 ```python
 class Config:
-    def load(self, path: str) -> None:
-        """从 YAML 文件加载配置"""
+    def __init__(self, model_path="configs/model_cfg.yaml", physics_path="configs/physics_cfg.yaml"):
+        """加载模型与物理配置"""
 
-    def save(self, path: str) -> None:
-        """保存配置到 YAML 文件"""
+    def get(self, key: str, default=None):
+        """读取配置项"""
 ```
 
 ### 工具函数
@@ -331,11 +332,11 @@ class Config:
 #### 物理模型
 
 ```python
-from src.physics_models import AiryPSF, ZernikeBasis
+from src.core import AiryPhysicsModel, ZernikeBasis
 
-# Airy 点扩散函数
-psf = AiryPSF(wavelength=632e-9, f_number=5.6)
-psf_kernel = psf.generate_psf((256, 256))
+# Airy 前向模型（示例）
+physics = AiryPhysicsModel({"wavelength": 632e-9, "finesse": 10})
+interferogram = physics.forward_model(phase_map.unsqueeze(0).unsqueeze(0))
 
 # Zernike 基函数
 zernike = ZernikeBasis(num_modes=37)
@@ -346,7 +347,7 @@ reconstructed = zernike.reconstruct(coeffs)
 #### 数据处理
 
 ```python
-from src.data_loader import InterferometryDataset
+from src.utils.data_loader import InterferometryDataset
 
 # 创建数据集
 dataset = InterferometryDataset(

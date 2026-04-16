@@ -1,6 +1,6 @@
 """Inference and benchmarking entry point."""
 
-from utils.config_loader import Config
+from src.utils import Config
 
 
 def main() -> None:

@@ -22,10 +22,12 @@ def build_dataloader(
     )
 
 
-class PlaceholderDataset(torch.utils.data.Dataset):
+class InterferometryDataset(torch.utils.data.Dataset):
     """Minimal dataset skeleton. Replace with your actual dataset."""
 
-    def __init__(self, length: int = 0):
+    def __init__(self, data_dir: str, transform=None, length: int = 0):
+        self.data_dir = data_dir
+        self.transform = transform
         self.length = length
 
     def __len__(self) -> int:
@@ -33,3 +35,10 @@ class PlaceholderDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index: int):
         raise NotImplementedError("Implement dataset access logic.")
+
+
+class PlaceholderDataset(InterferometryDataset):
+    """Backward-compatible alias for the minimal dataset skeleton."""
+
+    def __init__(self, length: int = 0):
+        super().__init__(data_dir="", transform=None, length=length)

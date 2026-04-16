@@ -1,7 +1,8 @@
-"""Training script for UnrolledPINN — Fizeau phase retrieval (full version).
+"""
+Training script for UnrolledBaseline — Fizeau phase retrieval PINN.
+Based on: test/train_vnet.py (Reyes-Figueroa et al., Applied Optics, 2021)
 
-Model  : UnrolledPINN (src.models.integrated_net)
-         5-iteration algorithm unrolling with physics gradient + VNet + Zernike
+Model  : UnrolledBaseline (src.models.integrated_net)
 Input  : X — measured intensity fringe pattern  (B, 1, 128, 128)
 Output : predicted phase map                     (B, 1, 128, 128)
 Target : Y — ground truth phase map              (B, 1, 128, 128)
@@ -14,13 +15,11 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import scipy.io as sio
-import matplotlib
-matplotlib.use('Agg')          # 非交互后端，避免 plt.show() 阻塞
 import matplotlib.pyplot as plt
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
 
-from src.models.integrated_net import UnrolledPINN
+from src.models.integrated_net import UnrolledBaseline
 from src.core.physics_ops import AirySimulator
 
 # -------------------- 输出目录 --------------------
@@ -37,15 +36,30 @@ def generate_synthetic_dataset(
     n_zernike: int = 15,
     seed: int = 42,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Generate physics-informed synthetic intensity/phase pairs.
+
+    For each sample:
+      1. Build a random Zernike-like phase map (ground truth Y).
+      2. Apply the Airy formula to get a clean intensity image.
+      3. Add random tilt + Gaussian noise to get noisy intensity (input X).
+
+    Returns:
+        X: (N, 1, H, W) noisy intensity images.
+        Y: (N, 1, H, W) ground truth phase maps.
+    """
     rng = np.random.default_rng(seed)
 
+    # Normalised pupil coordinates on a unit disk
     lin = np.linspace(-1, 1, size, dtype=np.float32)
     xg, yg = np.meshgrid(lin, lin)
     rho = np.sqrt(xg ** 2 + yg ** 2)
     theta = np.arctan2(yg, xg)
-    mask = (rho <= 1.0).astype(np.float32)
+    mask = (rho <= 1.0).astype(np.float32)          # circular pupil
 
-    basis = []
+    # Pre-compute a set of Zernike-like radial basis functions:
+    #   Z_j(rho, theta) = rho^n * cos/sin(m * theta)
+    # using sequential (n, m) pairs — simple but physically meaningful.
+    basis = []  # list of (H, W) arrays
     for n in range(0, 8):
         for m in range(-n, n + 1, 2):
             if len(basis) >= n_zernike:
@@ -53,41 +67,50 @@ def generate_synthetic_dataset(
             radial = rho ** n
             angular = np.cos(m * theta) if m >= 0 else np.sin(-m * theta)
             b = radial * angular * mask
-            b = b / (np.abs(b).max() + 1e-8)
+            b = b / (np.abs(b).max() + 1e-8)       # normalise to [-1, 1]
             basis.append(b)
         if len(basis) >= n_zernike:
             break
-    basis = np.stack(basis, axis=0)
+    basis = np.stack(basis, axis=0)                  # (n_zernike, H, W)
 
-    airy = AirySimulator(R=R, I_max=I_max, global_scale=1.0, learnable=False)
+    # Fixed (non-learnable) Airy simulator for data generation
+    airy = AirySimulator(R=R, I_max=I_max, learnable=False)
 
     X_list, Y_list = [], []
     for _ in range(n_samples):
+        # Random Zernike coefficients — moderate amplitude
         coeffs = rng.standard_normal(n_zernike).astype(np.float32)
-        coeffs *= 0.5
-        phase = np.tensordot(coeffs, basis, axes=1)
-        phase *= mask
+        coeffs *= 2.0                                # scale for ~[-2π, 2π] range
+        phase = np.tensordot(coeffs, basis, axes=1)  # (H, W)
+        phase *= mask                                # zero outside pupil
 
-        phase_t = torch.from_numpy(phase).unsqueeze(0).unsqueeze(0)
+        # Random tilt perturbation on the measured intensity
+        tilt_x = np.float32(rng.uniform(-1.0, 1.0))
+        tilt_y = np.float32(rng.uniform(-1.0, 1.0))
+        tilt = tilt_x * xg + tilt_y * yg            # (H, W)
+
+        phase_t = torch.from_numpy(phase).unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
+        tilt_t  = torch.from_numpy(tilt).unsqueeze(0).unsqueeze(0)
 
         with torch.no_grad():
-            I_clean = airy(phase_t)
+            I_clean = airy(phase_t + tilt_t)          # (1,1,H,W)
 
+        # Additive Gaussian noise on intensity
         noise = torch.randn_like(I_clean) * noise_std
         I_noisy = (I_clean + noise).clamp(0.0, I_max)
 
         X_list.append(I_noisy)
         Y_list.append(phase_t)
 
-    X = torch.cat(X_list, dim=0)
-    Y = torch.cat(Y_list, dim=0)
+    X = torch.cat(X_list, dim=0)   # (N, 1, H, W)
+    Y = torch.cat(Y_list, dim=0)   # (N, 1, H, W)
     return X, Y
 
 
 X, Y = generate_synthetic_dataset(n_samples=500)
 print(f"合成数据形状: X={X.shape}, Y={Y.shape}")
 
-# -------------------- 2. 数据增强 --------------------
+# -------------------- 2. 数据增强函数 --------------------
 class RandomAugment:
     def __init__(self, p_flip=0.5, p_rot=0.5):
         self.p_flip = p_flip
@@ -111,11 +134,13 @@ augment = RandomAugment()
 # -------------------- 3. 训练准备 --------------------
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-model     = UnrolledPINN(n_iters=5, share_weights=True).to(device)
+# UnrolledBaseline: inputs intensity X, outputs predicted phase
+model     = UnrolledBaseline(n_iters=1).to(device)
 optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
 scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
-criterion = nn.MSELoss()
+criterion = nn.L1Loss()   # L1 loss — preserves phase edges
 
+# 划分训练集 / 验证集 (90% / 10%)
 n_samples = X.shape[0]
 n_train   = int(0.9 * n_samples)
 indices   = np.random.permutation(n_samples)
@@ -130,14 +155,12 @@ val_dataset   = TensorDataset(X_val,   Y_val)
 train_loader  = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader    = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False)
 
-epochs        = 100
+epochs        = 150
 best_val_loss = float('inf')
 train_losses  = []
 val_losses    = []
 
 print(f"训练设备: {device}")
-print(f"模型: UnrolledPINN  n_iters=5  share_weights=True")
-print(f"参数量: {sum(p.numel() for p in model.parameters()):,}")
 print(f"训练样本: {len(train_dataset)}, 验证样本: {len(val_dataset)}")
 
 # -------------------- 4. 训练循环 --------------------
@@ -151,41 +174,27 @@ for epoch in epoch_bar:
         leave=False, unit='batch',
     )
     for batch_x, batch_y in batch_bar:
+        # 在线数据增强
         batch_x_aug = batch_x.clone()
         batch_y_aug = batch_y.clone()
         for i in range(batch_x.size(0)):
             batch_x_aug[i], batch_y_aug[i] = augment(batch_x_aug[i], batch_y_aug[i])
 
-        batch_x_aug = batch_x_aug.to(device)
-        batch_y_aug = batch_y_aug.to(device)
+        batch_x_aug = batch_x_aug.to(device)  # intensity input
+        batch_y_aug = batch_y_aug.to(device)  # ground truth phase
 
         optimizer.zero_grad()
-        pred_phase = model(batch_x_aug)
-
-        # 主损失：L1(预测相位, 真值相位)
-        loss_main = criterion(pred_phase, batch_y_aug)
-
-        # 物理一致性损失：L1(Airy(预测相位), 输入强度图)
-        I_pred = model.airy(pred_phase)
-        loss_phys = criterion(I_pred, batch_x_aug)
-
-        loss = loss_main + 0.1 * loss_phys
+        pred_phase = model(batch_x_aug)                    # (B, 1, H, W) predicted phase
+        loss       = criterion(pred_phase, batch_y_aug)    # phase error
         loss.backward()
-
-        # 梯度裁剪：防止物理层反传梯度爆炸
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
         optimizer.step()
         total_train_loss += loss.item()
-        batch_bar.set_postfix(
-            loss=f'{loss.item():.4f}',
-            main=f'{loss_main.item():.4f}',
-            phys=f'{loss_phys.item():.4f}',
-        )
+        batch_bar.set_postfix(loss=f'{loss.item():.4f}')
 
     avg_train_loss = total_train_loss / len(train_loader)
     train_losses.append(avg_train_loss)
 
+    # 验证
     model.eval()
     total_val_loss = 0
     with torch.no_grad():
@@ -200,6 +209,7 @@ for epoch in epoch_bar:
     val_losses.append(avg_val_loss)
     lr_now = optimizer.param_groups[0]['lr']
 
+    # 每个 epoch 都更新外层进度条信息
     epoch_bar.set_postfix(
         train=f'{avg_train_loss:.4f}',
         val=f'{avg_val_loss:.4f}',
@@ -212,7 +222,7 @@ for epoch in epoch_bar:
     saved = ''
     if avg_val_loss < best_val_loss:
         best_val_loss = avg_val_loss
-        torch.save(model.state_dict(), OUTPUT_DIR / 'best_pinn.pth')
+        torch.save(model.state_dict(), OUTPUT_DIR / 'best_baseline.pth')
         saved = ' ★ saved'
 
     tqdm.write(
@@ -222,7 +232,7 @@ for epoch in epoch_bar:
     )
 
 # -------------------- 5. 测试与可视化 --------------------
-model.load_state_dict(torch.load(OUTPUT_DIR / 'best_pinn.pth'))
+model.load_state_dict(torch.load(OUTPUT_DIR / 'best_baseline.pth'))
 model.eval()
 
 test_input  = X_val[0:1].to(device)
@@ -232,7 +242,8 @@ with torch.no_grad():
 test_output_np = test_output.cpu().squeeze().numpy()
 test_input_np  = X_val[0].cpu().squeeze().numpy()
 
-sio.savemat(str(OUTPUT_DIR / 'result_pinn.mat'), {
+# 保存结果
+sio.savemat(str(OUTPUT_DIR / 'result_baseline.mat'), {
     'intensity_input': test_input_np,
     'pred_phase':      test_output_np,
     'gt_phase':        test_truth,
@@ -240,6 +251,7 @@ sio.savemat(str(OUTPUT_DIR / 'result_pinn.mat'), {
     'val_loss':        val_losses,
 })
 
+# 计算 PSNR（相位范围约 2π，peak 设为 2π）
 def psnr(img1, img2, peak=2 * np.pi):
     mse = np.mean((img1 - img2) ** 2)
     if mse == 0:
@@ -249,6 +261,7 @@ def psnr(img1, img2, peak=2 * np.pi):
 psnr_val = psnr(test_output_np, test_truth)
 print(f"测试图像 PSNR: {psnr_val:.2f} dB")
 
+# 绘图
 vmin = min(test_output_np.min(), test_truth.min())
 vmax = max(test_output_np.max(), test_truth.max())
 plt.figure(figsize=(15, 10))
@@ -274,7 +287,7 @@ plt.subplot(2, 3, 4)
 plt.plot(train_losses, label='Train Loss')
 plt.plot(val_losses,   label='Val Loss')
 plt.legend()
-plt.title('Training Curves (UnrolledPINN)')
+plt.title('Training Curves (UnrolledBaseline)')
 plt.xlabel('Epoch')
 plt.ylabel('L1 Loss')
 plt.yscale('log')
@@ -287,7 +300,7 @@ plt.title('Absolute Phase Error')
 plt.axis('off')
 
 plt.tight_layout()
-plt.savefig(OUTPUT_DIR / 'result_pinn.png', dpi=150)
-plt.close()                    # 关闭图片，不阻塞
+plt.savefig(OUTPUT_DIR / 'result_baseline.png', dpi=150)
+plt.show()
 
 print(f"训练完成！结果保存至 {OUTPUT_DIR}")

@@ -49,6 +49,7 @@ data/
 models/
 checkpoints/
 output/
+outputs/
 results/
 
 # OS

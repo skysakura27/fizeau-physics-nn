@@ -8,11 +8,9 @@ of the system are working correctly after installation.
 import pytest
 import torch
 import numpy as np
-from pathlib import Path
 
 # Import project modules
-from src.config import Config
-from src.utils import create_circular_mask, normalize_phase
+from src.utils import Config, create_circular_mask, normalize_phase
 from tests import (
     TEST_DEVICE, TEST_DTYPE, TEST_IMAGE_SIZE,
     create_test_interferogram, create_test_phase,
@@ -25,8 +23,7 @@ class TestBasicFunctionality:
 
     def test_config_loading(self):
         """Test that configuration can be loaded."""
-        config_path = Path(__file__).parent.parent / 'config' / 'config.yaml'
-        config = Config(str(config_path))
+        config = Config()
 
         # Should not raise exception during initialization
         assert config.data is not None
@@ -75,19 +72,18 @@ class TestBasicFunctionality:
     def test_imports(self):
         """Test that main modules can be imported."""
         # Test core modules that should exist
-        from src.config import Config
-        from src.utils import create_circular_mask, normalize_phase
+        from src.utils import Config, create_circular_mask, normalize_phase
 
         # Test that fizeau_network can be imported (may be incomplete)
         try:
-            from src.fizeau_network import FizeauPhysicsNet
+            from src.models import FizeauPhysicsNet
         except ImportError:
             # Expected during development if not fully implemented
             pass
 
         # Physics models may not exist yet
         try:
-            from src.physics_models import AiryPSF, ZernikeBasis
+            from src.core import AiryPhysicsModel, ZernikeBasis
         except ImportError:
             # Expected during development
             pass

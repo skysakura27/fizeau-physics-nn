@@ -4,7 +4,7 @@ from typing import Dict
 
 import torch
 
-from core.airy_simulator import AiryPhysicsModel
+from ..core.airy_simulator import AiryPhysicsModel
 
 
 def generate_interferogram(phase: torch.Tensor, physics_cfg: Dict) -> torch.Tensor:

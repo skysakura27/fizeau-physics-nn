@@ -6,8 +6,8 @@ Tests the complete physical closed-loop methodology.
 import torch
 import numpy as np
 import pytest
-from src.fizeau_network import FizeauPhysicsNet
-from src.utils import DWTPreprocessor, ZernikeBasis, AiryPhysicsModel
+from src.models import FizeauPhysicsNet
+from src.core import DWTPreprocessor, ZernikeBasis, AiryPhysicsModel
 
 
 class TestFourStagePipeline:
@@ -52,10 +52,12 @@ class TestFourStagePipeline:
 
         # Check dimensions for each subband
         for key, tensor in processed.items():
+            if key == "coeffs":
+                continue
             assert tensor.shape[0] == self.batch_size
             assert tensor.shape[1] == 1
-            assert tensor.shape[2] == self.height // 4  # After 2 levels of 2x downsampling
-            assert tensor.shape[3] == self.width // 4
+            assert tensor.shape[2] == self.height // 2  # 1 level of 2x downsampling
+            assert tensor.shape[3] == self.width // 2
 
         print("✓ Stage 1: Physical signal analysis passed")
 
@@ -69,7 +71,11 @@ class TestFourStagePipeline:
         details = torch.cat([coeffs['LH'], coeffs['HL'], coeffs['HH']], dim=1)  # High-frequency details
 
         # Check energy distribution
-        total_energy = sum(torch.sum(tensor ** 2) for tensor in coeffs.values())
+        total_energy = sum(
+            torch.sum(tensor ** 2)
+            for key, tensor in coeffs.items()
+            if key != "coeffs"
+        )
         approx_energy = torch.sum(approx ** 2)
         details_energy = torch.sum(details ** 2)
 

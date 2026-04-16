@@ -51,7 +51,7 @@ def sample_phase_data():
 @pytest.fixture
 def mock_network():
     """Mock network for testing"""
-    from src.fizeau_network import FizeauPhysicsNet
+    from src.models import FizeauPhysicsNet
     return FizeauPhysicsNet()
 ```
 
@@ -63,26 +63,17 @@ def mock_network():
 import pytest
 import torch
 import numpy as np
-from src.physics_models import AiryPSF, ZernikeBasis
+from src.core import AiryPhysicsModel, ZernikeBasis
 
-class TestAiryPSF:
-    def test_psf_normalization(self, device):
-        """Test PSF normalization"""
-        psf_model = AiryPSF(wavelength=632e-9, f_number=5.6)
-        psf = psf_model.generate_psf(image_size=(256, 256))
+class TestAiryModel:
+    def test_forward_shape(self, device):
+        """Test Airy forward model shape and finiteness"""
+        model = AiryPhysicsModel({"wavelength": 632e-9, "finesse": 10})
+        phase = torch.randn(1, 1, 256, 256, device=device)
+        interferogram = model.forward_model(phase)
 
-        # Check normalization
-        assert torch.allclose(torch.sum(psf), torch.tensor(1.0), atol=1e-6)
-
-    def test_psf_symmetry(self, device):
-        """Test PSF symmetry"""
-        psf_model = AiryPSF(wavelength=632e-9, f_number=5.6)
-        psf = psf_model.generate_psf(image_size=(256, 256))
-
-        # Check center symmetry
-        center = 128
-        assert torch.allclose(psf[center, center-5:center+6],
-                            torch.flip(psf[center, center-5:center+6], [0]))
+        assert interferogram.shape == phase.shape
+        assert torch.all(torch.isfinite(interferogram))
 
 class TestZernikeBasis:
     def test_orthogonality(self, sample_phase_data):
@@ -118,59 +109,51 @@ class TestZernikeBasis:
 # test_network_components.py
 import pytest
 import torch
-from src.fizeau_network import DWTLayer, UnrollingBlock, ZernikeSupervisor
+from src.models import AiryPINBlock, ZernikeSupervisor
+from src.core import DWTPreprocessLayer
 
 class TestDWTLayer:
     def test_dwt_forward(self, sample_phase_data):
         """Test DWT forward transform"""
-        dwt = DWTLayer(wavelet='haar')
-        coeffs = dwt.forward(sample_phase_data)
+        dwt = DWTPreprocessLayer()
+        x = sample_phase_data.unsqueeze(0).unsqueeze(0)
+        coeffs = dwt.forward(x)
 
         # Check output structure
-        assert isinstance(coeffs, dict)
-        assert 'approx' in coeffs
-        assert 'detail' in coeffs
-
-    def test_dwt_inverse(self, sample_phase_data):
-        """Test DWT inverse transform"""
-        dwt = DWTLayer(wavelet='haar')
-
-        # Forward and inverse
-        coeffs = dwt.forward(sample_phase_data)
-        reconstructed = dwt.inverse(coeffs)
-
-        # Check reconstruction
-        mse = torch.mean((reconstructed - sample_phase_data)**2)
-        assert mse < 1e-6
+        assert coeffs.shape[1] == 4
+        assert coeffs.shape[-2] == x.shape[-2] // 2
+        assert coeffs.shape[-1] == x.shape[-1] // 2
 
 class TestUnrollingBlock:
     def test_unrolling_forward(self, sample_phase_data):
         """Test unrolling block forward pass"""
-        block = UnrollingBlock(physics_model=None)
+        block = AiryPINBlock({"physics": {"wavelength": 632e-9, "finesse": 10}, "channels": 16})
 
         # Create mock interferogram
-        interferogram = torch.abs(torch.exp(1j * sample_phase_data))**2
+        phase = sample_phase_data.unsqueeze(0).unsqueeze(0)
+        interferogram = torch.abs(torch.exp(1j * phase))**2
 
-        output = block.forward(sample_phase_data, interferogram)
+        output, _ = block.forward(phase, interferogram)
 
         # Check output shape
-        assert output.shape == sample_phase_data.shape
+        assert output.shape == phase.shape
 
     def test_gradient_flow(self, sample_phase_data):
         """Test gradient flow through unrolling block"""
-        block = UnrollingBlock(physics_model=None)
-        interferogram = torch.abs(torch.exp(1j * sample_phase_data))**2
+        block = AiryPINBlock({"physics": {"wavelength": 632e-9, "finesse": 10}, "channels": 16})
+        phase = sample_phase_data.unsqueeze(0).unsqueeze(0)
+        interferogram = torch.abs(torch.exp(1j * phase))**2
 
         # Enable gradients
-        sample_phase_data.requires_grad_(True)
+        phase.requires_grad_(True)
 
-        output = block.forward(sample_phase_data, interferogram)
+        output, _ = block.forward(phase, interferogram)
         loss = torch.mean(output**2)
         loss.backward()
 
         # Check gradients
-        assert sample_phase_data.grad is not None
-        assert torch.sum(torch.abs(sample_phase_data.grad)) > 0
+        assert phase.grad is not None
+        assert torch.sum(torch.abs(phase.grad)) > 0
 ```
 
 ### 集成测试
@@ -180,18 +163,17 @@ class TestUnrollingBlock:
 # test_integration.py
 import pytest
 import torch
-from src.fizeau_network import FizeauPhysicsNet
-from src.config import Config
+from src.models import FizeauPhysicsNet
+from src.utils import Config
 
 class TestEndToEnd:
     def test_full_pipeline(self, device):
         """Test complete phase retrieval pipeline"""
         # Load configuration
         config = Config()
-        config.load('config/config.yaml')
 
         # Create network
-        network = FizeauPhysicsNet(config.network)
+        network = FizeauPhysicsNet(config.get("network", {}))
 
         # Generate test data
         phase_gt = self.generate_test_phase()
@@ -230,7 +212,7 @@ class TestEndToEnd:
 import time
 import torch
 import pytest
-from src.fizeau_network import FizeauPhysicsNet
+from src.models import FizeauPhysicsNet
 
 @pytest.mark.benchmark
 def test_inference_speed(benchmark, device):

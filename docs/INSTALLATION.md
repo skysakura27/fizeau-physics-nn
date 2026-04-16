@@ -176,8 +176,9 @@ export TORCH_USE_CUDA_DSA=1
 复制并修改配置模板:
 
 ```bash
-cp config/config.yaml config/my_config.yaml
-# 编辑 my_config.yaml 根据需要修改参数
+cp configs/model_cfg.yaml configs/model_cfg.local.yaml
+cp configs/physics_cfg.yaml configs/physics_cfg.local.yaml
+# 编辑 *.local.yaml 根据需要修改参数
 ```
 
 ### IDE 配置
@@ -229,7 +230,7 @@ python examples/minimal-example.py
 python -c "import torch; print(torch.cuda.is_available())"
 
 # 内存测试
-python -c "import src.fizeau_network; print('Import successful')"
+python -c "import src.models.unrolled_net; print('Import successful')"
 ```
 
 ## 故障排除
